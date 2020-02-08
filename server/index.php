@@ -2,7 +2,7 @@
 	// header
 	header('Content-type:application/json;charset=utf-8');
 
-    $rawApiData = file_get_contents("https://2.db.transport.rest/journeys?from=736150&to=736100&departure=in%206%20minutes&results=10");
+    $rawApiData = file_get_contents("https://2.db.transport.rest/journeys?from=736150&to=736100&departure=in%206%20minutes&results=5");
 
     if (!$rawApiData) {
     	die("API ERROR");
@@ -21,7 +21,7 @@
 
     		if ($timeDiff < 180 ||
                 empty($legs->line->name) > 0 ||
-                empty($legs->direction) ) {
+                empty($legs->direction)) {
                 continue;
     		}
     		
@@ -50,8 +50,8 @@
         return substr($string, 0, 10);
     }
 
-    usort($responseData, function ($a, $b) {
+    usort($&, function ($a, $b) {
 		return $a->t - $b->t;
     });
 
-    echo json_encode($responseData);
+    echo json_encode(array_slice($responseData, 0, 2));
