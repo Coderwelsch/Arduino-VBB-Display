@@ -8,15 +8,18 @@
 #include "config.h";
 
 // globals
-const char* url = "https://projects.coderwelsch.com/misc/vbb-display/";
+String apiUrl = "";
 
+// https://arduinojson.org/v6/assistant/
+const int JSON_DATA_SIZE = JSON_ARRAY_SIZE(LENGTH_OF_STATION_DATA) + LENGTH_OF_STATION_DATA * JSON_OBJECT_SIZE(3);
+
+// init of lcd
 LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
 
 struct Tram_Struct {
-	char name[8];
-	int timeLeft;
-	int initialTime;
-	char line[2];
+	char d[8];
+	int t;
+	char n[2];
 };
 
 struct Tram_Struct tram1;
@@ -33,7 +36,29 @@ void setup() {
 	// lcd
 	lcd.begin(16, 2);
 
+	apiUrl = getApiUrl();
+	Serial.println(apiUrl);
+
 	startWiFi();
+}
+
+String getApiUrl () {
+	// TODO: maybe there is an easier way to
+	// concatenate that string? Hmmm…
+	String url = "https://projects.coderwelsch.com/misc/vbb-display/?";
+	
+	url.concat("from=");
+	url.concat(FROM_TRAM_STATION);
+	url.concat("&");
+
+	url.concat("to=");
+	url.concat(TO_TRAM_STATION);
+	url.concat("&");
+
+	url.concat("length=");
+	url.concat(LENGTH_OF_STATION_DATA);
+
+	return url;
 }
 
 void updateLastMillis () {
@@ -43,19 +68,27 @@ void updateLastMillis () {
 void loop () {
 	if (
 		dataFetched && 
-		(tram1.timeLeft > TRAM_DEPARTURE_DELAY) &&
-		(tram2.timeLeft > TRAM_DEPARTURE_DELAY)
+		(tram1.t > TRAM_DEPARTURE_DELAY) &&
+		(tram2.t > TRAM_DEPARTURE_DELAY)
 	) {
 		displayTimes();
 	} else if ((WiFi.status() == WL_CONNECTED)) {
-		Serial.println("FETCH");
+		Serial.println("FETCHING ...");
 
 		getData();
-		displayTimes();
 
-		Serial.println("FETCHED");
+		Serial.println("FETCHED ...");
 
-		dataFetched = true;
+		// when data fetching was not successfully
+		// retry it in 5 secs
+		if (!dataFetched) {
+			Serial.println("FETCH ERROR. WAIT 5 SECS ...");
+			delay(5000);
+		} else {
+			displayTimes();
+			Serial.println("FETCHED SUCCESSFULLY");
+		}
+
 		dataDisplayed = true;
 	} else {
 		lcd.clear();
@@ -81,18 +114,23 @@ void displayTimes () {
 
 void displayTramLine (Tram_Struct *tram, byte line, int secondsPassed) {
 	// check if tram display has to update
-	int minsBefore = tram->timeLeft / 60;
-	int minsAfter = (tram->timeLeft - secondsPassed) / 60;
+	int minsBefore = tram->t / 60;
+	int minsAfter = (tram->t - secondsPassed) / 60;
 
-	int minsLeft = tram->timeLeft / 60;
+	int minsLeft = tram->t / 60;
 	String time = minsLeft > 9 ? String(minsLeft) : " " + String(minsLeft);
 
-	tram->timeLeft -= secondsPassed;
+	tram->t -= secondsPassed;
+
+	// check if the display should really update
+	if (minsBefore === minsAfter) {
+		return;
+	}
 
 	lcd.setCursor(0, line);
 	lcd.print(
-		String(tram->line) + " " +
-		String(strndup(tram->name, 3)) + " | " +
+		String(tram->n) + " " +
+		String(strndup(tram->d, 3)) + " | " +
 		time + " min"
 	);
 }
@@ -118,33 +156,42 @@ void startWiFi () {
 void getData () {
 	HTTPClient http;	
  
-	http.begin(url); // Specify the URL
+	http.begin(apiUrl); // Specify the URL
 	int httpCode = http.GET();
 
-	if (httpCode > 0) { // Check for the returning code
-			String payload = http.getString();
+	if (httpCode >= 200 && httpCode < 400) { // Check for the returning code
+		String payload = http.getString();
+		StaticJsonDocument<JSON_DATA_SIZE> doc;
+		DeserializationError error = deserializeJson(doc, payload);
 
-			// https://arduinojson.org/v6/assistant/
-			const size_t jsonDataSize = JSON_ARRAY_SIZE(4) + 4 * JSON_OBJECT_SIZE(3);
-			StaticJsonDocument<jsonDataSize> doc;
-			
-			DeserializationError error = deserializeJson(doc, payload);
+		if (error) {
+			lcd.clear();
+			lcd.setCursor(0, 0);
+			lcd.println("Datenfehler:");
+			lcd.setCursor(0, 1);
+			lcd.println(String(error.c_str()));
 
-			if (error) {
-				lcd.clear();
-				lcd.setCursor(0, 0);
-				lcd.println("Datenfehler:");
-				lcd.setCursor(0, 1);
-				lcd.println(String(error.c_str()));
-			} else if (doc.size()) {
-				strcpy(tram1.name, doc[0]["d"].as<char*>());
-				tram1.initialTime = tram1.timeLeft = doc[0]["t"].as<int>();
-				strcpy(tram1.line, doc[0]["n"].as<char*>());
+			dataFetched = false;
+		} else if (doc.size()) {
+			strcpy(tram1.d, doc[0]["d"].as<char*>());
+			tram1.t = doc[0]["t"].as<int>();
+			strcpy(tram1.n, doc[0]["n"].as<char*>());
 
-				strcpy(tram2.name, doc[1]["d"].as<char*>());
-				tram2.initialTime = tram2.timeLeft = doc[1]["t"].as<int>();
-				strcpy(tram2.line, doc[1]["n"].as<char*>());
-			}
+			strcpy(tram2.d, doc[1]["d"].as<char*>());
+			tram2.t = doc[1]["t"].as<int>();
+			strcpy(tram2.n, doc[1]["n"].as<char*>());
+
+			dataFetched = true;
+		} else {
+			lcd.clear();
+			lcd.setCursor(0, 0);
+			lcd.println("Keine Trams");
+
+			lcd.setCursor(0, 1);
+			lcd.println("gefunden -.-");
+
+			dataFetched = false;
+		}
 	} else {
 		lcd.clear();
 		lcd.setCursor(0, 0);
@@ -152,6 +199,8 @@ void getData () {
 
 		lcd.setCursor(0, 1);
 		lcd.print(String(httpCode));
+
+		dataFetched = false;
 	}
 
 	http.end();
